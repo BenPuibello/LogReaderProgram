@@ -1,0 +1,348 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace logReaderV3
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            //variables for reading and writing the file
+            //string exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+            string inPath = @"C:\Users\bpuibello\Desktop\vbTestingFiles\verbose.txt";
+            string outPath = @"C:\Users\bpuibello\Desktop\vbTestingFiles\parsedCalls.txt";
+            StreamWriter sw = new StreamWriter(outPath);
+            string buffer;
+
+            //variables for line count and unformatted sections
+            int lineCount = 1;
+            int unformattedStart = 1;
+            int unformattedEnd = 0;
+            int prepareLoopLines = 0;
+            bool _prepareLoop = false;
+            bool _firstPrep = true;
+         
+            //variables to parse lines
+            string prepCheck = "Prep";
+            bool _foundPreparing = false;
+            string dbCheck = "[DB";
+            bool _dbCheck = false;
+            string greaterThanCheck = ">>";
+            int greaterThanCount = 0;
+            bool _tablePrinted = false;
+
+            //variables for time comparison
+            string start = null;
+            string end = null;
+
+            //variables for stats method
+            List<UnformattedLines> unformattedList = new List<UnformattedLines>();
+            List<QueryBlock> queryList = new List<QueryBlock>();
+
+            try
+            {
+                using (StreamReader sr = new StreamReader(inPath))
+                {
+                    while ((buffer = sr.ReadLine()) != null)
+                    {
+
+                        if (_prepareLoop)
+                        {
+                            ++prepareLoopLines;
+                        }
+
+                        //find the start of my prepare loop
+                        if (buffer.Contains(prepCheck))
+                        {
+                            _foundPreparing = true;
+                            unformattedEnd = lineCount - 1;
+                            if(prepareLoopLines > 2  || (_firstPrep && lineCount > 1) )
+                            {
+
+                                //sw.WriteLine($"Unformatted {unformattedStart} - {lineCount - 1}");
+                                UnformattedLines temp = new UnformattedLines(unformattedStart, unformattedEnd);
+                                temp.CalcTotalLines();
+                                unformattedList.Add(temp);
+                                _firstPrep = false;
+                            }
+                                                 
+                        }
+
+                        //print table if TableCheck method returns a true
+                        if (_foundPreparing && TableCheck(buffer) && !_tablePrinted )
+                        {
+                            sw.WriteLine($"{lineCount}) {buffer}");
+                            _tablePrinted = true;
+                        }
+
+                        //The reason why I check for DB is because then the next two lines that contain >> I want to print thus leaving one that I don't.
+                        if (_foundPreparing && (buffer.Contains(dbCheck)))
+                        {
+                            _dbCheck = true;
+                        }
+
+                        //PRINT MY TIMESTAMPS
+                        if (_dbCheck && (buffer.Contains(greaterThanCheck)))
+                        {
+                            
+                            if(greaterThanCount == 0)
+                            {
+                                start = buffer;
+                                sw.WriteLine($"{lineCount}) {buffer}");
+                            }
+                            else
+                            {
+                                sw.WriteLine($"{lineCount}) {buffer}");
+                                end = buffer;
+                            }
+                            ++greaterThanCount;
+                        }
+
+                        //I got all of my verbose block now reset the logging
+                        if (greaterThanCount == 2)
+                        {
+                            _foundPreparing = false;
+                            _dbCheck = false;
+                            _tablePrinted = false;
+                            greaterThanCount = 0;
+                            sw.WriteLine();
+                            //vars for preprare looping
+                            _prepareLoop = true;
+                            unformattedStart = lineCount + 1;
+                            prepareLoopLines = 0;
+                            //create a new QueryBlock object and add to my list
+                            QueryBlock temp = new QueryBlock(start, end, (lineCount - 2));
+                            queryList.Add(temp);
+                        
+                        //CompareTime(start, end, sw);
+                            
+
+                        }
+                        
+                        ++lineCount; 
+
+                    }//end of while
+                }//end of using
+            }//end of try
+            catch (Exception ex)
+            {
+                Console.WriteLine($"{ex.Message}");
+            }
+            sw.Close();
+
+            //check for unformatted at EOF
+            if(prepareLoopLines > 2)
+            {
+                unformattedEnd = lineCount;
+                UnformattedLines temp = new UnformattedLines(unformattedStart, unformattedEnd);
+                temp.CalcTotalLines();
+                unformattedList.Add(temp);
+            }
+
+            //call print stats method here.  THIS IS THE END OF THE ROAD.
+            PrintStats(unformattedList, queryList);
+            //TempMethod(queryList);
+
+            Console.WriteLine("Program completed succesfully.  Press any key to end....");
+            Console.ReadKey();
+        }
+
+        static bool TableCheck(string buffer)
+        {
+            string fromCheck = "From";
+            string fromCheck_lower = "from";
+            string updateCheck = "Update";
+            string insertCheck = "Insert";
+            
+
+            if (buffer.Contains(fromCheck) || buffer.Contains(fromCheck_lower) || buffer.Contains(updateCheck) || buffer.Contains(insertCheck))
+            {
+                return true;
+            }
+            else
+            {
+                return false;
+            }
+
+        }
+
+        static bool CompareTime(QueryBlock query)
+        {
+
+            //logic for the end of the hour, not midnight.
+            if (query.StartMin == 59 && (query.FractionSecEnd >= query.FractionSecStart))
+            {
+                return true;
+            }
+            //logic to handle a query that runs past midnight
+            else if (query.StartHour == 23 && query.StartMin == 59 && query.EndMin == 0 && (query.FractionSecEnd >= query.FractionSecStart) )
+            {
+                return true;
+            }
+            else if ( (query.EndSec >= query.StartSec + 1) && (query.FractionSecEnd >= query.FractionSecStart) )
+            {
+                return true;
+            }
+            else if(query.EndMin >= query.StartMin + 1)
+            {
+                return true;
+                
+            }
+            else
+            {
+                return false;
+            }
+            
+        }
+
+        static void PrintStats(List<UnformattedLines> unformattedList, List<QueryBlock> queryList)
+        {
+            string outPath = @"C:\Users\bpuibello\Desktop\vbTestingFiles\statsFile.txt";
+
+            using (StreamWriter sw = new StreamWriter(outPath))
+            {
+                sw.WriteLine("*****************VERBOSE STATS FILE*********************");
+                sw.WriteLine("\n\n\n");
+                sw.WriteLine("UNFORMATTED LINES");
+
+                for (int i = 0; i < unformattedList.Count; ++i)
+                {
+                    UnformattedLines temp = unformattedList[i];
+                    sw.WriteLine($"{temp.PrintData()}");
+                }
+
+                sw.WriteLine("\n\n\n");
+
+                sw.WriteLine("LONG RUNNING QUERIES");
+
+                for (int i = 0; i < queryList.Count; ++i)
+                {
+                    QueryBlock temp = queryList[i];
+                    bool _longQuery = CompareTime(temp);
+
+                    if(_longQuery)
+                    {
+                        sw.WriteLine($"Long running query at {temp.StartLine}");
+                    }
+
+                }
+            }
+
+        }
+
+    }
+
+    class UnformattedLines
+    {
+        
+        private int startLine;
+        private int endLine;
+        private int totalLines;
+
+
+        public UnformattedLines(int startLine, int endLine)
+        {
+            this.startLine = startLine;
+            this.endLine = endLine;
+            
+
+        }
+
+        public void CalcTotalLines()
+        {
+            this.totalLines = this.endLine - this.startLine;
+        }
+
+        public string PrintData()
+        {
+            string s = Convert.ToString($"Unformatted lines start = {this.startLine}, ends at {this.endLine} for a total {this.totalLines}");
+            return s;
+        }
+
+    }
+
+    class QueryBlock
+    {
+        private int startMin;
+        private int endMin;
+        private int startSec;
+        private int endSec;
+        private int startLine;
+        private int fractionSecStart;
+        private int fractionSecEnd;
+        private int startHour;
+
+        public QueryBlock(string start, string end, int line)
+        {
+            char[] startArray = start.ToCharArray();
+            char[] endArray = end.ToCharArray();
+
+            //convert my mins
+            int startMin = Convert.ToInt32(String.Concat(startArray[17], startArray[18]));
+            int endMin = Convert.ToInt32(String.Concat(endArray[17], endArray[18]));
+            //convert secs
+            int startSec = Convert.ToInt32(String.Concat(startArray[20], startArray[21]));
+            int endSec = Convert.ToInt32(String.Concat(endArray[20], endArray[21]));
+            //convert fraction of secs
+            int fractionSecStart = Convert.ToInt32(String.Concat(startArray[23], startArray[24], startArray[25]));
+            int fractionSecEnd = Convert.ToInt32(String.Concat(endArray[23], endArray[24], endArray[25]));
+            //convert hours
+            int startHour = Convert.ToInt32(String.Concat(startArray[14], startArray[15]));
+
+
+            this.startMin = startMin;
+            this.endMin = endMin;
+            this.startSec = startSec;
+            this.endSec = endSec;
+            this.startLine = line;
+            this.fractionSecStart = fractionSecStart;
+            this.fractionSecEnd = fractionSecEnd;
+            this.startHour = startHour;
+
+        }
+
+        public int StartMin
+        {
+            get { return this.startMin; }
+        }
+
+        public int EndMin
+        {
+            get { return this.endMin; }
+        }
+
+        public int StartSec
+        {
+            get { return this.startSec; }
+        }
+
+        public int EndSec
+        {
+            get { return this.endSec; }
+        }
+
+        public int StartLine
+        {
+            get { return this.startLine;  }
+        }
+
+        public int FractionSecStart
+        {
+            get { return this.fractionSecStart;  }
+        }
+
+        public int FractionSecEnd
+        {
+            get { return this.fractionSecEnd;  }
+        }
+
+        public int StartHour
+        {
+            get { return this.startHour; }
+        }
+    }
+}
